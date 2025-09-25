@@ -30,11 +30,27 @@ export interface CategoryBreakdown {
   color: string;
 }
 
+export interface TransactionQuery {
+  type?: 'income' | 'expense';
+  category?: string;
+  startDate?: string; // ISO date string
+  endDate?: string;   // ISO date string
+}
+
 // Transaction API functions
 export const transactionApi = {
-  // Get all transactions
-  getTransactions: async (): Promise<Transaction[]> => {
-    const response = await fetch(`${API_BASE_URL}/transactions`);
+  // Get transactions with optional server-side filters
+  getTransactions: async (query?: TransactionQuery, token?: string): Promise<Transaction[]> => {
+    const params = new URLSearchParams();
+    if (query?.type) params.set('type', query.type);
+    if (query?.category) params.set('category', query.category);
+    if (query?.startDate) params.set('startDate', query.startDate);
+    if (query?.endDate) params.set('endDate', query.endDate);
+    const qs = params.toString();
+    const response = await fetch(`${API_BASE_URL}/transactions${qs ? `?${qs}` : ''}` , {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      credentials: 'include',
+    });
     if (!response.ok) {
       throw new Error('Failed to fetch transactions');
     }
@@ -42,11 +58,12 @@ export const transactionApi = {
   },
 
   // Add new transaction
-  addTransaction: async (transaction: Omit<Transaction, '_id' | 'createdAt' | 'updatedAt'>): Promise<Transaction> => {
+  addTransaction: async (transaction: Omit<Transaction, '_id' | 'createdAt' | 'updatedAt'>, token?: string): Promise<Transaction> => {
     const response = await fetch(`${API_BASE_URL}/transactions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(transaction),
     });
@@ -57,11 +74,12 @@ export const transactionApi = {
   },
 
   // Bulk add transactions
-  addBulkTransactions: async (transactions: Omit<Transaction, '_id' | 'createdAt' | 'updatedAt'>[]): Promise<any> => {
+  addBulkTransactions: async (transactions: Omit<Transaction, '_id' | 'createdAt' | 'updatedAt'>[], token?: string): Promise<any> => {
     const response = await fetch(`${API_BASE_URL}/transactions/bulk`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({ transactions }),
     });
@@ -72,8 +90,11 @@ export const transactionApi = {
   },
 
   // Get transaction stats
-  getStats: async (): Promise<TransactionStats> => {
-    const response = await fetch(`${API_BASE_URL}/stats`);
+  getStats: async (token?: string): Promise<TransactionStats> => {
+    const response = await fetch(`${API_BASE_URL}/stats`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      credentials: 'include',
+    });
     if (!response.ok) {
       throw new Error('Failed to fetch stats');
     }
@@ -81,8 +102,11 @@ export const transactionApi = {
   },
 
   // Get monthly overview
-  getMonthlyOverview: async (): Promise<MonthlyOverview[]> => {
-    const response = await fetch(`${API_BASE_URL}/monthly-overview`);
+  getMonthlyOverview: async (token?: string): Promise<MonthlyOverview[]> => {
+    const response = await fetch(`${API_BASE_URL}/monthly-overview`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      credentials: 'include',
+    });
     if (!response.ok) {
       throw new Error('Failed to fetch monthly overview');
     }
@@ -90,10 +114,35 @@ export const transactionApi = {
   },
 
   // Get category breakdown
-  getCategoryBreakdown: async (): Promise<CategoryBreakdown[]> => {
-    const response = await fetch(`${API_BASE_URL}/category-breakdown`);
+  getCategoryBreakdown: async (token?: string): Promise<CategoryBreakdown[]> => {
+    const response = await fetch(`${API_BASE_URL}/category-breakdown`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      credentials: 'include',
+    });
     if (!response.ok) {
       throw new Error('Failed to fetch category breakdown');
+    }
+    return response.json();
+  },
+};
+
+export const receiptApi = {
+  // Upload a receipt image/pdf and extract data
+  extract: async (file: File, token?: string): Promise<{
+    filename: string;
+    mimeType: string;
+    size: number;
+    parsed: { merchant: string; date: string; total: number; items: any[] };
+  }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await fetch(`${API_BASE_URL}/receipts/extract`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      body: formData,
+    });
+    if (!response.ok) {
+      throw new Error('Failed to extract receipt');
     }
     return response.json();
   },

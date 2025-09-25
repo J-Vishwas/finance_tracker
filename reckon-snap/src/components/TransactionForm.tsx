@@ -15,6 +15,8 @@ import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@clerk/clerk-react";
+import { transactionApi } from "@/services/api";
 
 const formSchema = z.object({
   type: z.enum(["income", "expense"]),
@@ -36,6 +38,7 @@ const expenseCategories = [
 export function TransactionForm() {
   const [transactionType, setTransactionType] = useState<"income" | "expense">("expense");
   const { toast } = useToast();
+  const { getToken } = useAuth();
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -55,18 +58,8 @@ export function TransactionForm() {
         amount: parseFloat(values.amount)
       };
 
-      const response = await fetch('http://localhost:3001/api/transactions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(transactionData),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errorData.error || 'Failed to add transaction');
-      }
+      const token = await getToken();
+      await transactionApi.addTransaction(transactionData as any, token || undefined);
 
       toast({
         title: "Transaction Added",

@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import { useDropzone } from "react-dropzone";
-import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, Loader2, Database } from "lucide-react";
+import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, Loader2, Database, FileImage, File as FileIcon } from "lucide-react";
 import * as XLSX from 'xlsx';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,6 +11,8 @@ import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { receiptApi, transactionApi } from "@/services/api";
+import { useAuth } from "@clerk/clerk-react";
 
 interface ExcelTransaction {
   type: string;
@@ -26,11 +28,15 @@ interface ProcessedData {
 }
 
 export default function ReceiptUpload() {
+  const { getToken } = useAuth();
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
+  const [uploadedReceipts, setUploadedReceipts] = useState<File[]>([]);
   const [processedData, setProcessedData] = useState<ProcessedData | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingProgress, setProcessingProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extracted, setExtracted] = useState<any | null>(null);
   const { toast } = useToast();
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
@@ -47,6 +53,20 @@ export default function ReceiptUpload() {
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
       'application/vnd.ms-excel': ['.xls'],
       'text/csv': ['.csv']
+    },
+    multiple: true
+  });
+
+  const onDropReceipts = useCallback((acceptedFiles: File[]) => {
+    setUploadedReceipts(prev => [...prev, ...acceptedFiles]);
+    toast({ title: "Receipts added", description: `${acceptedFiles.length} file(s) ready for OCR.` });
+  }, [toast]);
+
+  const receiptsDrop = useDropzone({
+    onDrop: onDropReceipts,
+    accept: {
+      'image/*': ['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif'],
+      'application/pdf': ['.pdf']
     },
     multiple: true
   });
@@ -173,18 +193,8 @@ export default function ReceiptUpload() {
         date: new Date(transaction.date).toISOString()
       }));
 
-      const response = await fetch('http://localhost:3001/api/transactions/bulk', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          transactions: transactionsToUpload
-        }),
-      });
-
-      if (response.ok) {
-        const result = await response.json();
+      const token = await getToken();
+      const result = await transactionApi.addBulkTransactions(transactionsToUpload as any, token || undefined);
         
         toast({
           title: "Submit complete",
@@ -194,10 +204,6 @@ export default function ReceiptUpload() {
         // Clear processed data after successful upload
         setProcessedData(null);
         setUploadedFiles([]);
-      } else {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errorData.error || 'Upload failed');
-      }
     } catch (error) {
       toast({
         title: "Upload failed",
@@ -213,6 +219,25 @@ export default function ReceiptUpload() {
     setUploadedFiles([]);
     setProcessedData(null);
     setProcessingProgress(0);
+    setUploadedReceipts([]);
+    setExtracted(null);
+  };
+
+  const extractReceipts = async () => {
+    if (uploadedReceipts.length === 0) return;
+    setIsExtracting(true);
+    try {
+      // Demo: process first file only
+      const file = uploadedReceipts[0];
+      const token = await getToken();
+      const result = await receiptApi.extract(file, token || undefined);
+      setExtracted(result);
+      toast({ title: "Extraction complete", description: `Parsed: ${result.filename}` });
+    } catch (e) {
+      toast({ title: "Extraction failed", description: e instanceof Error ? e.message : 'Unable to extract', variant: 'destructive' });
+    } finally {
+      setIsExtracting(false);
+    }
   };
 
   return (
@@ -363,6 +388,71 @@ export default function ReceiptUpload() {
           </CardContent>
         </Card>
       )}
+
+      {/* Receipt OCR Upload */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Upload className="h-5 w-5" />
+            Upload Receipts (Image/PDF)
+          </CardTitle>
+          <CardDescription>
+            Drag and drop images or PDFs of receipts to extract expense data
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div
+            {...receiptsDrop.getRootProps()}
+            className={cn(
+              "border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors",
+              receiptsDrop.isDragActive ? "border-primary bg-primary/5" : "border-muted-foreground/25 hover:border-primary/50"
+            )}
+          >
+            <input {...receiptsDrop.getInputProps()} />
+            <FileImage className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+            {receiptsDrop.isDragActive ? (
+              <p className="text-primary font-medium">Drop the receipt here...</p>
+            ) : (
+              <div>
+                <p className="font-medium mb-2">Choose files or drag and drop</p>
+                <p className="text-sm text-muted-foreground">Supports images and PDF up to 10MB each</p>
+              </div>
+            )}
+          </div>
+
+          {uploadedReceipts.length > 0 && (
+            <div className="mt-4 space-y-2">
+              {uploadedReceipts.map((f, i) => (
+                <div key={i} className="flex items-center gap-3 p-3 border rounded-lg">
+                  <FileIcon className="h-5 w-5" />
+                  <div className="flex-1">
+                    <p className="font-medium">{f.name}</p>
+                    <p className="text-sm text-muted-foreground">{(f.size/1024/1024).toFixed(2)} MB</p>
+                  </div>
+                  <Badge variant="outline">Ready</Badge>
+                </div>
+              ))}
+              <div className="flex gap-3">
+                <Button onClick={extractReceipts} disabled={isExtracting}>
+                  {isExtracting ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Extracting...</>) : 'Extract' }
+                </Button>
+                <Button variant="outline" onClick={() => { setUploadedReceipts([]); setExtracted(null); }} disabled={isExtracting}>Clear</Button>
+              </div>
+            </div>
+          )}
+
+          {extracted && (
+            <div className="mt-6">
+              <h4 className="font-medium mb-2">Extracted Data</h4>
+              <div className="text-sm">
+                <p><span className="font-medium">Merchant:</span> {extracted.parsed.merchant}</p>
+                <p><span className="font-medium">Date:</span> {new Date(extracted.parsed.date).toLocaleString()}</p>
+                <p><span className="font-medium">Total:</span> ${extracted.parsed.total?.toFixed?.(2) ?? extracted.parsed.total}</p>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Processed Data */}
       {processedData && (

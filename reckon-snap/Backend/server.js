@@ -1,21 +1,45 @@
+require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const path = require('path');
 const app = express();
-const port = 3001;
+const { clerkMiddleware, requireAuth } = require('@clerk/express');
+const port = process.env.PORT || 3001;
 
 // Middleware
 app.use(express.json());
 
 app.use(cors({
-  origin: ["http://localhost:8080", "http://localhost:8081", "http://localhost:8082", "http://localhost:8083", "http://localhost:5173"],  // frontend URLs
+  origin: [
+    "http://localhost:8080",
+    "http://localhost:8081",
+    "http://localhost:8082",
+    "http://localhost:8083",
+    "http://localhost:5173"
+  ],
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true
 }));
 
+// Verify Clerk keys are present and attach middleware explicitly
+const publishableKey = process.env.CLERK_PUBLISHABLE_KEY;
+const secretKey = process.env.CLERK_SECRET_KEY;
+
+if (!publishableKey || !secretKey) {
+  console.warn('Clerk keys missing: ' +
+    (!publishableKey ? '[CLERK_PUBLISHABLE_KEY] ' : '') +
+    (!secretKey ? '[CLERK_SECRET_KEY]' : '') +
+    ' - set them in Backend/.env');
+}
+
+app.use(clerkMiddleware({
+  publishableKey,
+  secretKey,
+}));
 
 // MongoDB connection
-mongoose.connect('mongodb://localhost:27017/budgettracking')
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/budgettracking')
 .then(() => {
     console.log('Connected to MongoDB');
     // Start server only after successful connection
@@ -24,58 +48,26 @@ mongoose.connect('mongodb://localhost:27017/budgettracking')
     });
 })
 .catch(err => console.error('MongoDB connection error:', err));
+// Models & Routes
+const transactionsRouter = require('./routes/transactions');
+const receiptsRouter = require('./routes/receipts');
 
-// Transaction Schema
-const transactionSchema = new mongoose.Schema({
-    type: {
-        type: String,
-        enum: ['income', 'expense'],
-        required: true
-    },
-    amount: {
-        type: Number,
-        required: true,
-        min: 0
-    },
-    category: {
-        type: String,
-        required: true
-    },
-    date: {
-        type: Date,
-        required: true
-    },
-    description: {
-        type: String,
-        required: true,
-        maxlength: 200
-    }
-}, { timestamps: true });
-
-const Transaction = mongoose.model('Transaction', transactionSchema);
-
-// API Endpoints
-
-// Get all transactions
-app.get('/api/transactions', async (req, res) => {
-    try {
-        const transactions = await Transaction.find()
-            .sort({ date: -1 }); // Get last 10 transactions
-        res.json(transactions);
-    } catch (error) {
-        res.status(500).json({ error: 'Error fetching transactions' });
-    }
-});
+// Mount routers (protect all API routes by default)
+app.use('/api/transactions', requireAuth(), transactionsRouter);
+app.use('/api/receipts', requireAuth(), receiptsRouter);
 
 // Get monthly overview data
-app.get('/api/monthly-overview', async (req, res) => {
+app.get('/api/monthly-overview', requireAuth(), async (req, res) => {
     try {
+        const Transaction = require('./models/Transaction');
+        const userId = req.auth.userId;
         const sixMonthsAgo = new Date();
         sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
         const monthlyData = await Transaction.aggregate([
             {
                 $match: {
+                    userId,
                     date: { $gte: sixMonthsAgo }
                 }
             },
@@ -116,14 +108,17 @@ app.get('/api/monthly-overview', async (req, res) => {
 });
 
 // Get category breakdown
-app.get('/api/category-breakdown', async (req, res) => {
+app.get('/api/category-breakdown', requireAuth(), async (req, res) => {
     try {
+        const Transaction = require('./models/Transaction');
+        const userId = req.auth.userId;
         const currentMonth = new Date();
         const startOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
 
         const categoryData = await Transaction.aggregate([
             {
                 $match: {
+                    userId,
                     type: 'expense',
                     date: { $gte: startOfMonth }
                 }
@@ -151,8 +146,10 @@ app.get('/api/category-breakdown', async (req, res) => {
 });
 
 // Get stats overview
-app.get('/api/stats', async (req, res) => {
+app.get('/api/stats', requireAuth(), async (req, res) => {
     try {
+        const Transaction = require('./models/Transaction');
+        const userId = req.auth.userId;
         const currentMonth = new Date();
         const startOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
 
@@ -176,6 +173,7 @@ app.get('/api/stats', async (req, res) => {
             Transaction.aggregate([
                 {
                     $match: {
+                        userId,
                         date: { $gte: startOfMonth }
                     }
                 },
@@ -203,172 +201,16 @@ app.get('/api/stats', async (req, res) => {
     }
 });
 
-// Add new transaction
-app.post('/api/transactions', async (req, res) => {
-    try {
-        const { type, amount, category, date, description } = req.body;
 
-        console.log('POST /api/transactions hit with body:', req.body); // Debug log
-
-        // Validate input
-        if (!type || !amount || !category || !date || !description) {
-            console.log('Validation failed: Missing fields');
-            return res.status(400).json({ error: 'All fields are required' });
-        }
-
-        const parsedAmount = parseFloat(amount);
-        if (isNaN(parsedAmount) || parsedAmount < 0) {
-            console.log('Validation failed: Invalid amount');
-            return res.status(400).json({ error: 'Amount must be a positive number' });
-        }
-
-        const parsedDate = new Date(date);
-        if (isNaN(parsedDate.getTime())) {
-            console.log('Validation failed: Invalid date');
-            return res.status(400).json({ error: 'Date must be a valid date' });
-        }
-
-        if (type !== 'income' && type !== 'expense') {
-            console.log('Validation failed: Invalid type');
-            return res.status(400).json({ error: 'Type must be either "income" or "expense"' });
-        }
-
-        if (description.length > 200) {
-            console.log('Validation failed: Description too long');
-            return res.status(400).json({ error: 'Description must not exceed 200 characters' });
-        }
-
-        const transaction = new Transaction({
-            type,
-            amount: parsedAmount,
-            category,
-            date: parsedDate,
-            description
-        });
-
-        await transaction.save();
-        console.log('Transaction saved successfully:', transaction._id);
-        res.status(201).json(transaction);
-    } catch (error) {
-        console.error('Error in POST /api/transactions:', error); // Debug log
-        if (error.name === 'ValidationError') {
-            return res.status(400).json({ error: error.message });
-        }
-        res.status(500).json({ error: 'Error creating transaction' }); // Changed to 500 for non-validation errors
-    }
+// 404 handler for unknown API routes
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'API route not found' });
 });
 
-// Bulk add transactions from Excel
-app.post('/api/transactions/bulk', async (req, res) => {
-    try {
-        const { transactions } = req.body;
-
-        console.log('POST /api/transactions/bulk hit with:', transactions.length, 'transactions');
-
-        if (!Array.isArray(transactions) || transactions.length === 0) {
-            return res.status(400).json({ error: 'Transactions array is required and cannot be empty' });
-        }
-
-        const results = {
-            success: [],
-            errors: []
-        };
-
-        // Process each transaction
-        for (let i = 0; i < transactions.length; i++) {
-            const transactionData = transactions[i];
-            
-            try {
-                // Validate required fields
-                if (!transactionData.type || !transactionData.amount || !transactionData.category || !transactionData.date || !transactionData.description) {
-                    results.errors.push({
-                        index: i,
-                        error: 'Missing required fields',
-                        data: transactionData
-                    });
-                    continue;
-                }
-
-                // Validate transaction type
-                if (transactionData.type !== 'income' && transactionData.type !== 'expense') {
-                    results.errors.push({
-                        index: i,
-                        error: 'Invalid type. Must be "income" or "expense"',
-                        data: transactionData
-                    });
-                    continue;
-                }
-
-                // Validate amount
-                const parsedAmount = parseFloat(transactionData.amount);
-                if (isNaN(parsedAmount) || parsedAmount < 0) {
-                    results.errors.push({
-                        index: i,
-                        error: 'Invalid amount. Must be a positive number',
-                        data: transactionData
-                    });
-                    continue;
-                }
-
-                // Validate date
-                const parsedDate = new Date(transactionData.date);
-                if (isNaN(parsedDate.getTime())) {
-                    results.errors.push({
-                        index: i,
-                        error: 'Invalid date format',
-                        data: transactionData
-                    });
-                    continue;
-                }
-
-                // Validate description length
-                if (transactionData.description.length > 200) {
-                    results.errors.push({
-                        index: i,
-                        error: 'Description must not exceed 200 characters',
-                        data: transactionData
-                    });
-                    continue;
-                }
-
-                // Create transaction
-                const transaction = new Transaction({
-                    type: transactionData.type,
-                    amount: parsedAmount,
-                    category: transactionData.category,
-                    date: parsedDate,
-                    description: transactionData.description
-                });
-
-                const savedTransaction = await transaction.save();
-                results.success.push({
-                    index: i,
-                    transaction: savedTransaction
-                });
-
-                console.log(`Transaction ${i + 1} saved successfully:`, savedTransaction._id);
-
-            } catch (error) {
-                console.error(`Error processing transaction ${i + 1}:`, error);
-                results.errors.push({
-                    index: i,
-                    error: error.message || 'Unknown error',
-                    data: transactionData
-                });
-            }
-        }
-
-        console.log(`Bulk upload completed: ${results.success.length} successful, ${results.errors.length} errors`);
-
-        res.status(200).json({
-            message: `Bulk upload completed: ${results.success.length} successful, ${results.errors.length} errors`,
-            successCount: results.success.length,
-            errorCount: results.errors.length,
-            results: results
-        });
-
-    } catch (error) {
-        console.error('Error in POST /api/transactions/bulk:', error);
-        res.status(500).json({ error: 'Error processing bulk transactions' });
-    }
+// Global error handler
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  const status = err.status || 500;
+  res.status(status).json({ error: err.message || 'Internal Server Error' });
 });

@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { format } from "date-fns";
-import { Search, Filter, Download, Eye, RefreshCw, AlertCircle } from "lucide-react";
+import { Search, Filter, Download, Eye, RefreshCw, AlertCircle, Calendar as CalendarIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { useAuth } from "@clerk/clerk-react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,11 +12,16 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import { transactionApi, Transaction } from "@/services/api";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
 
 export default function Transactions() {
+  const { getToken } = useAuth();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState("all");
   const [filterCategory, setFilterCategory] = useState("all");
+  const [startDate, setStartDate] = useState<Date | undefined>(undefined);
+  const [endDate, setEndDate] = useState<Date | undefined>(undefined);
 
   // Fetch transactions from server
   const { 
@@ -24,8 +30,16 @@ export default function Transactions() {
     error, 
     refetch 
   } = useQuery({
-    queryKey: ['transactions'],
-    queryFn: transactionApi.getTransactions,
+    queryKey: ['transactions', filterType, filterCategory, startDate?.toISOString() ?? '', endDate?.toISOString() ?? ''],
+    queryFn: async () => {
+      const token = await getToken();
+      return transactionApi.getTransactions({
+        type: filterType === 'all' ? undefined : (filterType as 'income' | 'expense'),
+        category: filterCategory === 'all' ? undefined : filterCategory,
+        startDate: startDate ? new Date(startDate).toISOString() : undefined,
+        endDate: endDate ? new Date(endDate).toISOString() : undefined,
+      }, token || undefined);
+    },
     refetchOnWindowFocus: false,
   });
 
@@ -39,7 +53,41 @@ export default function Transactions() {
     return matchesSearch && matchesType && matchesCategory;
   });
 
-  const categories = [...new Set(transactions.map(t => t.category))];
+  const categories = useMemo(() => [...new Set(transactions.map(t => t.category))], [transactions]);
+
+  function exportToCsv() {
+    const headers = ["Type", "Amount", "Category", "Date", "Description"];
+    const rows = filteredTransactions.map(t => [
+      t.type,
+      t.amount,
+      t.category,
+      new Date(t.date).toISOString(),
+      (t.description ?? "").replace(/\n|\r/g, " ")
+    ]);
+
+    const csv = [headers, ...rows]
+      .map(r => r
+        .map(value => {
+          const v = String(value ?? "");
+          const needsQuotes = /[",\n]/.test(v);
+          const escaped = v.replace(/"/g, '""');
+          return needsQuotes ? `"${escaped}"` : escaped;
+        })
+        .join(",")
+      )
+      .join("\n");
+
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    link.href = url;
+    link.download = `transactions-${ts}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <div className="space-y-6">
@@ -60,7 +108,7 @@ export default function Transactions() {
             <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
             Refresh
           </Button>
-          <Button className="flex items-center gap-2">
+          <Button className="flex items-center gap-2" onClick={exportToCsv} disabled={transactions.length === 0}>
             <Download className="h-4 w-4" />
             Export CSV
           </Button>
@@ -115,12 +163,40 @@ export default function Transactions() {
               </SelectContent>
             </Select>
 
+            <div className="flex items-center gap-2">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className={cn("justify-start w-full", !startDate && "text-muted-foreground")}> 
+                    <CalendarIcon className="h-4 w-4 mr-2" />
+                    {startDate ? format(startDate, "MMM d, yyyy") : "Start date"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar mode="single" selected={startDate} onSelect={setStartDate} initialFocus />
+                </PopoverContent>
+              </Popover>
+
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className={cn("justify-start w-full", !endDate && "text-muted-foreground")}> 
+                    <CalendarIcon className="h-4 w-4 mr-2" />
+                    {endDate ? format(endDate, "MMM d, yyyy") : "End date"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar mode="single" selected={endDate} onSelect={setEndDate} initialFocus />
+                </PopoverContent>
+              </Popover>
+            </div>
+
             <Button 
               variant="outline" 
               onClick={() => {
                 setSearchTerm("");
                 setFilterType("all");
                 setFilterCategory("all");
+                setStartDate(undefined);
+                setEndDate(undefined);
               }}
             >
               Clear Filters

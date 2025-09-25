@@ -1,10 +1,13 @@
 import { useState, useEffect } from "react";
+import { useAuth } from "@clerk/clerk-react";
+import { transactionApi } from "@/services/api";
 import { TrendingUp, TrendingDown, DollarSign, PieChart } from "lucide-react";
 import { StatCard } from "@/components/StatCard";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart as RechartsPieChart, Pie, Cell } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart as RechartsPieChart, Pie, Cell, LineChart, Line, Legend } from "recharts";
 
 export default function Dashboard() {
+  const { getToken } = useAuth();
   const [monthlyData, setMonthlyData] = useState([]);
   const [categoryData, setCategoryData] = useState([]);
   const [recentTransactions, setRecentTransactions] = useState([]);
@@ -15,31 +18,38 @@ export default function Dashboard() {
     savingsRate: "0.0"
   });
 
+  // Derived datasets for additional charts
+  const incomeExpenseDonut = [
+    { name: 'Income', value: parseFloat(String(stats.monthlyIncome)) || 0, color: 'hsl(var(--income))' },
+    { name: 'Expenses', value: parseFloat(String(stats.monthlyExpenses)) || 0, color: 'hsl(var(--expense))' },
+  ];
+
+  const cumulativeBalanceData = monthlyData.reduce((acc: any[], curr: any, idx: number) => {
+    const delta = (Number(curr.income) || 0) - (Number(curr.expenses) || 0);
+    const prev = idx > 0 ? acc[idx - 1].balance : 0;
+    acc.push({ month: curr.month, balance: prev + delta });
+    return acc;
+  }, [] as any[]);
+
   useEffect(() => {
-    // Fetch monthly overview
-    fetch('http://localhost:3001/api/monthly-overview')
-      .then(res => res.json())
-      .then(data => setMonthlyData(data))
-      .catch(err => console.error('Error fetching monthly data:', err));
-
-    // Fetch category breakdown
-    fetch('http://localhost:3001/api/category-breakdown')
-      .then(res => res.json())
-      .then(data => setCategoryData(data))
-      .catch(err => console.error('Error fetching category data:', err));
-
-    // Fetch recent transactions
-    fetch('http://localhost:3001/api/transactions')
-      .then(res => res.json())
-      .then(data => setRecentTransactions(data))
-      .catch(err => console.error('Error fetching transactions:', err));
-
-    // Fetch stats
-    fetch('http://localhost:3001/api/stats')
-      .then(res => res.json())
-      .then(data => setStats(data))
-      .catch(err => console.error('Error fetching stats:', err));
-  }, []);
+    (async () => {
+      try {
+        const token = await getToken();
+        const [overview, categories, transactions, stats] = await Promise.all([
+          transactionApi.getMonthlyOverview(token || undefined),
+          transactionApi.getCategoryBreakdown(token || undefined),
+          transactionApi.getTransactions(undefined, token || undefined),
+          transactionApi.getStats(token || undefined),
+        ]);
+        setMonthlyData(overview);
+        setCategoryData(categories);
+        setRecentTransactions(transactions);
+        setStats(stats);
+      } catch (err) {
+        console.error('Error loading dashboard data:', err);
+      }
+    })();
+  }, [getToken]);
 
   return (
     <div className="space-y-8">
@@ -129,6 +139,79 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Additional Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Income vs Expense Line Chart */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Income vs Expense (Line)</CardTitle>
+            <CardDescription>Trend comparison over the last 6 months</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={monthlyData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="month" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Line type="monotone" dataKey="income" stroke="hsl(var(--income))" strokeWidth={2} name="Income" />
+                <Line type="monotone" dataKey="expenses" stroke="hsl(var(--expense))" strokeWidth={2} name="Expenses" />
+              </LineChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        {/* Income vs Expense Donut */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Income vs Expense (Donut)</CardTitle>
+            <CardDescription>This month’s totals</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <RechartsPieChart>
+                <Pie
+                  data={incomeExpenseDonut}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={90}
+                  label
+                >
+                  {incomeExpenseDonut.map((entry, index) => (
+                    <Cell key={`ied-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip />
+                <Legend />
+              </RechartsPieChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Cumulative Balance Over Time */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Cumulative Balance Over Time</CardTitle>
+          <CardDescription>Running total of income minus expenses</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={cumulativeBalanceData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="month" />
+              <YAxis />
+              <Tooltip />
+              <Line type="monotone" dataKey="balance" stroke="hsl(var(--chart-1))" strokeWidth={2} name="Balance" />
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
 
       {/* Recent Transactions */}
       <Card>

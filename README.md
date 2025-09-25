@@ -1,6 +1,7 @@
 # Reckon Snap - Finance Tracker
 
 A modern full-stack finance tracking application built with React, Express, and MongoDB. Track expenses, analyze spending patterns, and manage receipts with ease.
+<img width="1887" height="967" alt="Screenshot 2025-09-26 014413" src="https://github.com/user-attachments/assets/96b5cfd5-be26-4033-bd8d-186ac990c91f" />
 
 ## Features
 

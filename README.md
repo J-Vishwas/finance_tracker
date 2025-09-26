@@ -105,7 +105,7 @@ reckon-snap/
 
 ## Notes
 
-- Receipt OCR functionality is currently a placeholder
+
 - CORS is configured for local development
 - File upload size limit: 10MB
 

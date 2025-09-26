@@ -15,6 +15,11 @@ A modern full-stack finance tracking application built with React, Express, and 
 <img width="1433" height="686" alt="Screenshot 2025-09-26 014445" src="https://github.com/user-attachments/assets/eda8338e-1cf7-439f-8df7-0aab43637729" />
 
 
+<img width="1885" height="967" alt="Screenshot 2025-09-26 014515" src="https://github.com/user-attachments/assets/3e6246a4-cd3e-426d-b847-882b6ad5657b" />
+
+<img width="1877" height="991" alt="Screenshot 2025-09-26 014529" src="https://github.com/user-attachments/assets/8b0ccb28-4699-439c-8c35-8a2a030c5f08" />
+
+
 ## Features
 
 - 📊 Interactive dashboard with spending analytics
